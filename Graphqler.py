@@ -37,9 +37,9 @@ def load_introspection(file_path):
     print("[~] Using introspection file for schema.\n")
     return data
 
-def fetch_introspection(endpoint):
+def fetch_introspection(endpoint,session):
     introspection_query = '{"query":"query IntrospectionQuery{__schema{queryType{name} mutationType{name} subscriptionType{name} types{...FullType} directives{name description locations args {...InputValue}}}} fragment FullType on __Type{kind name description fields(includeDeprecated: true) {name description args {...InputValue} type {...TypeRef} isDeprecated deprecationReason} inputFields{...InputValue} interfaces{...TypeRef} enumValues(includeDeprecated: true) {name description isDeprecated deprecationReason} possibleTypes{...TypeRef}} fragment InputValue on __InputValue {name description type {...TypeRef} defaultValue} fragment TypeRef on __Type{kind name ofType {kind name ofType {kind name ofType {kind name}}}}"}'
-    response = requests.post(endpoint, json=json.loads(introspection_query))
+    response = session.post(endpoint, json=json.loads(introspection_query))
     print("[~] Fetched schema from live endpoint.\n")
     return response.json()
 
@@ -57,7 +57,6 @@ def parse_introspection(data):
     queries = []
     mutations = []
     types_dict = {}
-
     # Create a dictionary of types for easy lookup
     for v in data['data']['__schema']['types']:
         types_dict[v['name']] = v
@@ -165,7 +164,7 @@ def construct_graphql_query(item, args_input, fields_str):
         """
     return query
 
-def execute_graphql(endpoint, item, types_dict):
+def execute_graphql(endpoint, item, types_dict,session):
     print("\n[?] Do you want to create a query for this? (Y/n, default is no): ", end="")
     create_query = input().strip().lower() or "n"
     if create_query == 'y':
@@ -195,7 +194,7 @@ def execute_graphql(endpoint, item, types_dict):
             print("Constructed GraphQL Query:")
             print(query)
             # Send the request
-            response = requests.post(endpoint, json={'query': query})
+            response = session.post(endpoint, json={'query': query})
             response_json = response.json()
             print("\n[+] Response from server:")
             print(response_json)
@@ -229,12 +228,27 @@ def save_logs(query, response):
     # Save the response with UTF-8 encoding
     with open(f"logs/{next_id}.response.json", "w", encoding='utf-8') as res_file:
         json.dump(response, res_file, ensure_ascii=False, indent=2)
-
-def main(file_path=None, endpoint=None):
+        
+def load_cookies(session, cookies):
+    cookies_list = json.loads(open(cookies,'r').read())
+    cookies_dict = {cookie['name']: cookie['value'] for cookie in cookies_list}
+    session.cookies.update(cookies_dict)
+    print("[*] Cookies loaded !")
+    
+def main(file_path=None, endpoint=None, proxy=None,cookies=None):
+    request_session = requests.session()
+    if cookies:
+        load_cookies(request_session, cookies)
+    if proxy:
+        request_session.proxies = {
+            "http": proxy,
+            "https": proxy
+        }
+        print("[*] Proxy added !")
     if file_path:
         data = load_introspection(file_path)
     elif endpoint:
-        data = fetch_introspection(endpoint)
+        data = fetch_introspection(endpoint,request_session)
     else:
         print("[-] Error: No introspection file or endpoint provided.")
         sys.exit(1)
@@ -273,11 +287,13 @@ if __name__ == "__main__":
     banner()
 
     if len(sys.argv) < 2:
-        print("Usage: python Graphqler.py [-f <introspection_file.json>] [-u <graphql_endpoint_url>]")
+        print("Usage: python Graphqler.py [-f <introspection_file.json>] [-u <graphql_endpoint_url>] [-p <proxy>] [-c <cookies.json>]")
         sys.exit(1)
 
     ifile = None
     endpoint = None
+    proxy = None
+    cookies = None
 
     if '-f' in sys.argv:
         ifile_index = sys.argv.index('-f') + 1
@@ -289,8 +305,17 @@ if __name__ == "__main__":
         if endpoint_index < len(sys.argv):
             endpoint = sys.argv[endpoint_index]
 
+    if '-c' in sys.argv:
+        cookies_index = sys.argv.index('-c') + 1
+        if cookies_index < len(sys.argv):
+            cookies = sys.argv[cookies_index]
+    if '-p' in sys.argv:
+        proxy_index = sys.argv.index('-p') + 1
+        if proxy_index < len(sys.argv):
+            proxy = sys.argv[proxy_index]
+            
     if not ifile and not endpoint:
         print("Error: No introspection file or endpoint provided.")
         sys.exit(1)
 
-    main(ifile, endpoint)
+    main(ifile, endpoint,proxy,cookies)
